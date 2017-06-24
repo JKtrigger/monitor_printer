@@ -1,5 +1,5 @@
 *.pyc
 /log/*.*
-/printers/*.*
+/printers/
 *.lnk
 .idea

@@ -1,5 +1,7 @@
 *.pyc
 /log/*.*
-/printers/
+printers/
 *.lnk
 .idea
+log/
+setup.py

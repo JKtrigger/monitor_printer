@@ -136,7 +136,11 @@ class PrinterAdvancedTask(object):
     }
 
     # Директория логирования
-    BASE_PATH = os.path.dirname(__file__)
+    try:
+        BASE_PATH = os.path.dirname(__file__)
+    except NameError:  # После применения py2exe
+        import sys
+        BASE_PATH = os.path.dirname(os.path.abspath(sys.argv[0]))
     LOG = 'log'
     PRINTERS = 'printers'
     PRINTERS_PATH = os.path.join(BASE_PATH, PRINTERS)
@@ -499,7 +503,7 @@ class PrinterAdvancedTask(object):
         if len(args) > 2:
             self.log(u'Слишком много аргументов')
             raise AssertionError('Is too much arguments')
-        if len(args) < 1:
+        if len(args) == 1:
             self.log(u'Команда не содержит инструкции --MODE')
             raise AssertionError('should not pass')
         arg = args[1]
@@ -670,15 +674,26 @@ class PrinterAdvancedTask(object):
             rule = self.parser.get(self.MAIN_SECTION, option)
             if self.parser.has_option(rule, 'delete_printers_like'):
                 pattern = self.parser.get(rule, 'delete_printers_like')
+                # Для тех правил где указана переменная с номером сессии,
+                # по умолчанию будет отправляться 0
                 session = self.user_name_session_dict.get(rule)
+                if hasattr(session, 'session_id_number'):
+                    delete_patterns.append(
+                        re.compile(
+                            pattern.format(
+                                session_id_number=session.session_id_number,
+                            ).decode('cp1251').encode('cp1251'),
+                            re.UNICODE
+                        )
+                    )
                 delete_patterns.append(
                     re.compile(
                         pattern.format(
-                            session_id_number=session.session_id_number,
-                        ).decode('cp1251').encode('cp1251'),
-                        re.UNICODE
+                            session_id_number='0',
+                        )
                     )
                 )
+
         return delete_patterns
 
     def get_status_of_printer(self, name_of_printer):
@@ -768,7 +783,7 @@ class PrinterAdvancedTask(object):
         date_time = datetime.datetime.today()
         with codecs.open(self.LOG_FILE, 'a', 'utf-8') as file_:
             file_.write(
-                u'{:20}{:40}\n'.format(
+                u'{:20}{:40}\r\n'.format(
                     date_time.strftime("%H_%M"),
                     text)
             )

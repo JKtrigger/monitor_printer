@@ -5,3 +5,4 @@ printers/
 .idea
 log/
 setup.py
+/dist

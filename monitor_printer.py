@@ -9,8 +9,6 @@ import time
 import win32print
 import datetime
 
-import wmi
-
 # Константы пакета
 
 SESSION_ID_NUMBER = 'session_id_number'
@@ -42,6 +40,7 @@ class PowerShellIsNotInstalled(ExceptionNotFoundSection):
     Планировалось обойтись wmi или win32print,
     но по ряду причин с удалением принтра
     из системы эти API не справляются
+    , а в случаии wmi создают массу проблемм
     """
 
 
@@ -169,9 +168,12 @@ class PrinterAdvancedTask(object):
 
     # Команды windows оболочки
     # QUERY Путь
-    QUERY_EXE = 'c:\\windows\\sysnative\\query.exe'
+    # Обенносить Windows
+    QUERY_EXE = ''
+    QUERY_EXE_1 = 'c:\\windows\\sysnative\\query.exe'
+    QUERY_EXE_2 = 'c:\\WINDOWS\\system32\\query.exe'
     # SETX_PATH
-    SETX_EXE = 'c:\\Windows\\System32\\setx.exe'
+    SETX_EXE = 'C:\\Windows\\System32\\setx.exe'
     # Power shell
     POWER_SHELL_EXE = (
         'C:\\Windows\\system32\\WindowsPowerShell\\v1.0\\powershell.exe')
@@ -179,7 +181,9 @@ class PrinterAdvancedTask(object):
     power_shell_script = (
         # Базовый сценарий удаления в power shell
         u"""(Get-WmiObject -Query 'select * from Win32_Printer where name="{name_of_printer}"').delete()""")
-
+    clear_all_jobs = (
+        # Базовое удаление
+        u"""(Get-WmiObject -Query 'select * from Win32_Printer where name="{name_of_printer}"').CancelAllJobs()""")
     # QUERY Команды
     SESSION_QUERY_COMMAND_SESSION = 'session'
     SESSION_QUERY_COMMAND_USER = 'user'
@@ -202,14 +206,13 @@ class PrinterAdvancedTask(object):
         for session in self.ALL_SESSIONS:
             self.user_name_session_dict[session.session_username] = session
 
-
     def get_config(self):
         """
         Сбор настроек для выполнения в общем режиме.
 
         Только для текущего пользователя
         """
-        self.client_name = os.getenv(CLIENT_NAME)
+        self.client_name = os.getenv(CLIENT_NAME) or 'localhost'
         self.log(u'Сбор сведений из settings.conf')
         if self.parser.has_section(self.CURRENT_SESSION.session_username):
             self.log(u'Получение списка правил для текщего пользователя')
@@ -273,7 +276,7 @@ class PrinterAdvancedTask(object):
             raise PowerShellIsNotInstalled("Power Shell is not found")
 
         # Проверка логов файла
-        computer_name = os.getenv(CLIENT_NAME)
+        computer_name = os.getenv(CLIENT_NAME) or 'localhost'
         date_time = datetime.datetime.today()
         user_name = os.getenv('username')
         TXT = '.txt'
@@ -285,6 +288,12 @@ class PrinterAdvancedTask(object):
 
         file_ = codecs.open(full_log_path, 'a', 'utf-8')
         file_.close()
+
+        # Проверка доступности query.exe (отличаются для 64 и 32 Windows)
+        if os.path.exists(os.path.join(self.QUERY_EXE_1)):
+            self.QUERY_EXE = self.QUERY_EXE_1
+        else:
+            self.QUERY_EXE = self.QUERY_EXE_2
         self.log(u'Зауск приложения')
 
     @staticmethod
@@ -296,6 +305,7 @@ class PrinterAdvancedTask(object):
             shell=True
         )
         out, error = session_query_user.communicate()
+
         if error:
             sys.stdout.write(error)
             sys.stdout.write(u'Дальнейшее выполнение не возможно')
@@ -324,7 +334,6 @@ class PrinterAdvancedTask(object):
             self.QUERY_EXE,
             self.SESSION_QUERY_COMMAND_SESSION
         )
-
         compiled_pattern_for_query_session_command = re.compile(
             r'''
              (
@@ -334,11 +343,12 @@ class PrinterAdvancedTask(object):
                 (?P<is_current_session>\s|>)
                 # Захват имени сессии
                 (?P<session_name>
-                    \w+(-?)?\w+\#?(\d{1,2})?|(?!\s)\w+|\s+)
+                    \w+(-?)?\w+\#?(\d{1,5})?|(?!\s)\w+|\s+)
                 # Пропуск пробелов
                 (!?\s+)
                 # Захват всего имени пользователя
-                (?P<session_username>[a-zA-Z]+)
+                (?P<session_username>
+                    [a-zA-Zа-яА-Я0-9]+(\.)?([a-zA-Zа-яА-Я0-9]+)?)
                 # Пропуск пробелов
                 (!?\s+)
                 # Захват ID сессии
@@ -358,12 +368,13 @@ class PrinterAdvancedTask(object):
                 # признак указателя сессии
                 (?P<is_current_session>\s|>)
                 # Захват всего имени пользователя
-                (?P<session_username>[a-zA-Z]+)
+                (?P<session_username>
+                    [a-zA-Zа-яА-Я0-9]+(\.)?([a-zA-Zа-яА-Я0-9]+)?)
                 # Пропуск пробелов
                 (!?\s+)
                 # Захват имени сессии
                 (?P<session_name>
-                    \w+(-?)?\w+\#?(\d{1,2})?|\s+)
+                    \w+(-?)?\w+\#?(\d{1,5})?|\s+)
                 # Пропуск пробелов
                 (!?\s+)
                 # Захват ID сессии
@@ -394,7 +405,6 @@ class PrinterAdvancedTask(object):
         for row in ''.join(out_query_session).split('\r\n')[2:]:
             found_match_session = (
                 compiled_pattern_for_query_session_command.match(row))
-
             if found_match_session:
                 session_name = found_match_session.group(SESSION_NAME)
                 params_session = {
@@ -414,12 +424,10 @@ class PrinterAdvancedTask(object):
                 # и присутствует обязательно
                 params_store[params_session.get(SESSION_ID_NUMBER)] = (
                     params_session)
-
         out_query_user = self.exec_windows_commands(
             self.QUERY_EXE,
             self.SESSION_QUERY_COMMAND_USER
         )
-
         # 3) Отсеять только шапку [1:]
         # 4) Включить добавать побавочные параметры из команды query session
         for row in ''.join(out_query_user).split('\r\n')[1:]:
@@ -445,8 +453,8 @@ class PrinterAdvancedTask(object):
                 params_store[
                     found_match_user.group(SESSION_ID_NUMBER)
                 ][IDLE_TIME] = idle_time
-
         for store_item in params_store:
+            self.log(u'Обновление информации о сессиях')
             # Передаем паметры сессий
             if params_store[store_item]:
                 query_windows_session = QueryWindowsSession(
@@ -458,7 +466,7 @@ class PrinterAdvancedTask(object):
 
                 self.ALL_SESSIONS.append(query_windows_session)
         # Проброс доаолнительных сведений в окужение пользователя
-        # о текущем подключении собственной сесиии
+        # о текущем подключении собственной сесии
         self.exec_windows_commands(
             self.SETX_EXE,
             SESSION_ID_NUMBER,
@@ -650,6 +658,8 @@ class PrinterAdvancedTask(object):
                     # Программа показывает принтера помеченные на удаление
                     self.delete_printers(mode=self.MODE_VIEW)
                 self.log(u'Конец программы\n')
+            else:
+                self.log(u'Не была вызвана ни одна подпрограмма')
 
     @staticmethod
     def help():
@@ -667,6 +677,7 @@ class PrinterAdvancedTask(object):
             u'Режим для пользователя с правами администратора'
             u'Очищает очереди принтеров и затем удаляет их. \n'
             )
+
     def get_delete_patterns(self):
         """Сбор вырожений на удаление """
         delete_patterns = []
@@ -674,6 +685,7 @@ class PrinterAdvancedTask(object):
             rule = self.parser.get(self.MAIN_SECTION, option)
             if self.parser.has_option(rule, 'delete_printers_like'):
                 pattern = self.parser.get(rule, 'delete_printers_like')
+                pattern = pattern.decode('utf-8')
                 # Для тех правил где указана переменная с номером сессии,
                 # по умолчанию будет отправляться 0
                 session = self.user_name_session_dict.get(rule)
@@ -682,7 +694,7 @@ class PrinterAdvancedTask(object):
                         re.compile(
                             pattern.format(
                                 session_id_number=session.session_id_number,
-                            ).decode('cp1251').encode('cp1251'),
+                            ),
                             re.UNICODE
                         )
                     )
@@ -698,9 +710,12 @@ class PrinterAdvancedTask(object):
 
     def get_status_of_printer(self, name_of_printer):
         """Метод для получения статуса принтера"""
-        printer_handler = win32print.OpenPrinter(
-            name_of_printer
-        )
+        try:
+            printer_handler = win32print.OpenPrinter(
+                name_of_printer
+            )
+        except:
+            return
         query_printer = win32print.EnumJobs(
             printer_handler, 0, -1, 1)
 
@@ -734,7 +749,6 @@ class PrinterAdvancedTask(object):
             sys.stdout.write(u'\nПросмотр притеров подлежащих удалению\n\n')
 
         patterns_delete = self.get_delete_patterns()
-        wmi_object = wmi.WMI()
         about_printer_stdout_template = u'{:60s}{:16s}\n'
         sys.stdout.write(
             about_printer_stdout_template.format(
@@ -742,35 +756,50 @@ class PrinterAdvancedTask(object):
                 u"Состояние печати"
             )
         )
-        for printer in wmi_object.Win32_Printer():
+
+        for _, _, printer, _ in self.ALL_PRINTERS:
+
             for pattern in patterns_delete:
+
                 name_printer_witch_will_be_deleted = pattern.match(
-                    printer.name.encode('utf-8')
+                    unicode(printer.decode('cp1251'))
+
                 )
                 if name_printer_witch_will_be_deleted:
+
                     status_printer = self.get_status_of_printer(
-                        name_printer_witch_will_be_deleted.group().
-                        decode('utf-8')
+                        name_printer_witch_will_be_deleted.group()
                     )
                     # Вывод состояния принтеров
                     sys.stdout.write(
                         about_printer_stdout_template.format(
-                            name_printer_witch_will_be_deleted.group().
-                            decode('utf-8'),
+                            name_printer_witch_will_be_deleted.group(),
                             status_printer
                         )
                     )
                     if delete:
+
                         # Очистка очереди перед удалением
                         self.log(u'Очистка очереди на принтере')
-                        printer.CancelAllJobs()
+                        clear_all_jobs = self.clear_all_jobs.format(
+                            name_of_printer=unicode(printer.decode('cp1251'))
+                        ).encode('cp1251')
+                        self.exec_windows_commands(
+                            self.POWER_SHELL_EXE,
+                            clear_all_jobs
+                        )
                         command = self.power_shell_script.format(
                             # Магия для удаления принтеров с кирилицей
-                            name_of_printer=printer.name.encode(
-                                'cp1251').decode('cp1251')
+                            name_of_printer=unicode(printer.decode('cp1251'))
                         ).encode('cp1251')
                         # Удаление
-                        self.log(u'Удаление притера')
+                        self.log(
+                            u'Удаление принтера {}'.format(
+                                unicode(
+                                    printer.decode('cp1251')
+                                )
+                            )
+                        )
                         self.exec_windows_commands(
                             self.POWER_SHELL_EXE,
                             command
